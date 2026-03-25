@@ -24,19 +24,14 @@
     max-width: 1500px; margin: 0 auto;
   }
 
-  /* ---- Chart panel: image background + canvas overlay ---- */
+  /* ---- Chart panel: single canvas ---- */
   #chart-panel {
     flex: 2; background: #fff; border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     position: relative; overflow: hidden; min-width: 0;
   }
-  #chart-bg {
+  #chart-canvas {
     display: block; width: 100%; height: auto;
-  }
-  #chart-overlay {
-    position: absolute; top: 0; left: 0;
-    width: 100%; height: 100%;
-    pointer-events: none;
   }
 
   /* ---- Side panel ---- */
@@ -118,11 +113,9 @@
 </header>
 
 <main>
-  <!-- Chart: background image + transparent canvas overlay -->
+  <!-- Chart: fully drawn on canvas -->
   <div id="chart-panel">
-    <img id="chart-bg" src="psychrometric-chart.png"
-         alt="Psychrometric Chart">
-    <canvas id="chart-overlay"></canvas>
+    <canvas id="chart-canvas"></canvas>
   </div>
 
   <aside>
@@ -277,71 +270,293 @@ var Psychro = (function () {
 })();
 
 // ============================================================
-//  Chart Overlay — draws cooling line on transparent canvas
-//  positioned over the background chart image.
-//
-//  Calibration: pixel fractions of the chart image that
-//  correspond to the axis endpoints. Adjust if the image
-//  is cropped or padded differently.
+//  PsychroChart — draws the full psychrometric chart on canvas
+//  Matching the reference chart: DB -5..40 °C, W 0..0.030 kg/kg
 // ============================================================
-var ChartOverlay = (function () {
-  // Data range of the background chart
-  var DB_MIN = -5, DB_MAX = 40;       // °C  (x-axis)
-  var W_MIN  = 0,  W_MAX  = 0.030;    // kg/kg (y-axis, right side)
+var PsychroChart = (function () {
+  var DB_MIN = -5, DB_MAX = 40;
+  var W_MIN = 0, W_MAX = 0.030;
 
-  // Fractional pixel positions of the plot corners inside the image.
-  // These map the data range above to image coordinates.
-  // (0,0) = top-left of image, (1,1) = bottom-right.
-  // Adjust these values to match the exact chart image.
-  var PLOT = {
-    xLeft:   0.070,   // fraction-x  at DB_MIN (-5 °C)
-    xRight:  0.835,   // fraction-x  at DB_MAX (40 °C)
-    yBottom: 0.885,   // fraction-y  at W_MIN  (0 kg/kg)
-    yTop:    0.030    // fraction-y  at W_MAX  (0.030 kg/kg)
-  };
+  // Canvas / layout
+  var CW = 1200, CH = 750;
+  var MARGIN = { top: 40, right: 70, bottom: 55, left: 60 };
+  var plotL, plotR, plotT, plotB, plotW, plotH;
 
-  var canvas, ctx, imgW, imgH;
+  var canvas, ctx;
 
-  function sync(cvs, img) {
-    canvas = cvs;
-    imgW = img.naturalWidth  || img.width;
-    imgH = img.naturalHeight || img.height;
-    canvas.width  = imgW;
-    canvas.height = imgH;
-    ctx = canvas.getContext('2d');
+  function initLayout() {
+    plotL = MARGIN.left;
+    plotR = CW - MARGIN.right;
+    plotT = MARGIN.top;
+    plotB = CH - MARGIN.bottom;
+    plotW = plotR - plotL;
+    plotH = plotB - plotT;
   }
 
+  // Data -> pixel
   function px(Tdb) {
-    var frac = (Tdb - DB_MIN) / (DB_MAX - DB_MIN);
-    return (PLOT.xLeft + frac * (PLOT.xRight - PLOT.xLeft)) * imgW;
+    return plotL + (Tdb - DB_MIN) / (DB_MAX - DB_MIN) * plotW;
   }
   function py(W) {
-    var frac = (W - W_MIN) / (W_MAX - W_MIN);
-    return (PLOT.yBottom - frac * (PLOT.yBottom - PLOT.yTop)) * imgH;
+    return plotB - (W - W_MIN) / (W_MAX - W_MIN) * plotH;
   }
 
-  function clear() {
-    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  function setup(cvs) {
+    canvas = cvs;
+    canvas.width = CW;
+    canvas.height = CH;
+    ctx = canvas.getContext('2d');
+    initLayout();
+    drawBackground();
   }
 
-  function drawPoint(Tdb, W, color, label, offsetX, offsetY) {
-    var x = px(Tdb), y = py(W), r = 7;
+  function drawBackground() {
+    ctx.clearRect(0, 0, CW, CH);
+
+    // White background
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, CW, CH);
+
+    // Clip to plot area for curves
     ctx.save();
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillStyle = color;
-    ctx.fillText(label, x + (offsetX || 12), y + (offsetY || -10));
+    ctx.beginPath();
+    ctx.rect(plotL, plotT, plotW, plotH);
+    ctx.clip();
+
+    drawGrid();
+    drawRHCurves();
+    drawWBLines();
+    drawEnthalpyLines();
+
+    ctx.restore(); // unclip
+
+    drawAxes();
+    drawTitle();
+  }
+
+  function drawGrid() {
+    // Vertical grid: DB lines every 5 °C
+    ctx.strokeStyle = '#e0e0e0';
+    ctx.lineWidth = 0.5;
+    for (var t = 0; t <= 40; t += 5) {
+      if (t === DB_MIN) continue;
+      ctx.beginPath();
+      ctx.moveTo(px(t), plotT);
+      ctx.lineTo(px(t), plotB);
+      ctx.stroke();
+    }
+    // Horizontal grid: W lines every 0.005
+    for (var w = 0.005; w <= W_MAX; w += 0.005) {
+      ctx.beginPath();
+      ctx.moveTo(plotL, py(w));
+      ctx.lineTo(plotR, py(w));
+      ctx.stroke();
+    }
+  }
+
+  function drawRHCurves() {
+    var rhValues = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    var colors = {
+      100: { color: '#1565C0', width: 2.0 },
+      50:  { color: '#558B2F', width: 1.2 }
+    };
+
+    for (var ri = 0; ri < rhValues.length; ri++) {
+      var rh = rhValues[ri] / 100;
+      var style = colors[rhValues[ri]] || { color: '#90A4AE', width: 0.8 };
+
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width;
+      ctx.beginPath();
+
+      var started = false;
+      for (var t = DB_MIN; t <= DB_MAX; t += 0.5) {
+        var w = Psychro.W_from_RH(t, rh);
+        if (w < W_MIN || w > W_MAX) { started = false; continue; }
+        var x = px(t), y = py(w);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Label the RH curve
+      labelRH(rhValues[ri], rh);
+    }
+  }
+
+  function labelRH(rhPct, rh) {
+    // Find a good labeling position along the curve
+    var labelT;
+    if (rhPct === 100) labelT = 30;
+    else if (rhPct >= 70) labelT = 35;
+    else if (rhPct >= 40) labelT = 38;
+    else labelT = 39;
+
+    // Walk back to find a T where W is in range
+    for (var t = labelT; t >= DB_MIN; t -= 1) {
+      var w = Psychro.W_from_RH(t, rh);
+      if (w >= W_MIN && w <= W_MAX * 0.95) {
+        var x = px(t), y = py(w);
+
+        // Compute tangent for rotation
+        var w2 = Psychro.W_from_RH(t + 0.5, rh);
+        var angle = Math.atan2(py(w2) - py(w), px(t + 0.5) - px(t));
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.font = '11px sans-serif';
+        ctx.fillStyle = rhPct === 100 ? '#1565C0' : '#607D8B';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(rhPct + '%', 0, -4);
+        ctx.restore();
+        return;
+      }
+    }
+  }
+
+  function drawWBLines() {
+    // Wet-bulb lines: diagonal lines from saturation curve going right-downward
+    ctx.strokeStyle = '#B0BEC5';
+    ctx.lineWidth = 0.6;
+
+    for (var wb = -5; wb <= 35; wb += 5) {
+      ctx.beginPath();
+      var started = false;
+
+      // Start from saturation point
+      var wSat = Psychro.Wsat(wb);
+      if (wSat > W_MAX) continue;
+
+      for (var t = wb; t <= DB_MAX; t += 0.5) {
+        var w = Psychro.W_from_WB(t, wb);
+        if (w < W_MIN) break;
+        if (w > W_MAX) { started = false; continue; }
+        var x = px(t), y = py(w);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Label at saturation curve
+      if (wSat >= W_MIN && wSat <= W_MAX) {
+        ctx.save();
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = '#78909C';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        var lx = px(wb), ly = py(wSat);
+        ctx.fillText(wb + '°', lx - 14, ly - 2);
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawEnthalpyLines() {
+    // Enthalpy lines: nearly parallel to WB lines
+    ctx.strokeStyle = '#CE93D8';
+    ctx.lineWidth = 0.4;
+
+    for (var hVal = -5; hVal <= 110; hVal += 10) {
+      ctx.beginPath();
+      var started = false;
+
+      for (var w = W_MIN; w <= W_MAX; w += 0.0005) {
+        var t = Psychro.Tdb_from_hW(hVal, w);
+        if (t < DB_MIN || t > DB_MAX) { started = false; continue; }
+        var x = px(t), y = py(w);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function drawAxes() {
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1.5;
+
+    // Bottom axis
+    ctx.beginPath();
+    ctx.moveTo(plotL, plotB);
+    ctx.lineTo(plotR, plotB);
+    ctx.stroke();
+
+    // Left axis
+    ctx.beginPath();
+    ctx.moveTo(plotL, plotB);
+    ctx.lineTo(plotL, plotT);
+    ctx.stroke();
+
+    // Right axis
+    ctx.beginPath();
+    ctx.moveTo(plotR, plotB);
+    ctx.lineTo(plotR, plotT);
+    ctx.stroke();
+
+    // DB tick labels
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#333';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (var t = -5; t <= 40; t += 5) {
+      var x = px(t);
+      ctx.beginPath();
+      ctx.moveTo(x, plotB);
+      ctx.lineTo(x, plotB + 6);
+      ctx.stroke();
+      ctx.fillText(t, x, plotB + 8);
+    }
+
+    // DB axis label
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#1a3a5c';
+    ctx.fillText('Dry-Bulb Temperature (°C)', (plotL + plotR) / 2, plotB + 32);
+
+    // W tick labels (right side)
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#333';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (var w = 0; w <= 0.030; w += 0.005) {
+      var y = py(w);
+      ctx.beginPath();
+      ctx.moveTo(plotR, y);
+      ctx.lineTo(plotR + 6, y);
+      ctx.stroke();
+      ctx.fillText(w.toFixed(3), plotR + 9, y);
+    }
+
+    // W axis label (right, rotated)
+    ctx.save();
+    ctx.translate(plotR + 60, (plotT + plotB) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#1a3a5c';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Humidity Ratio (kg/kg)', 0, 0);
     ctx.restore();
   }
 
-  function draw(result) {
+  function drawTitle() {
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillStyle = '#1a3a5c';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Psychrometric Chart (101.325 kPa)', CW / 2, 10);
+  }
+
+  // ---- Draw cooling line result overlay ----
+  function drawResult(result) {
     if (!ctx) return;
-    clear();
+    // Redraw base chart then overlay result
+    drawBackground();
+
     var ea = result.entering, la = result.leaving;
 
-    // Cooling line (solid)
+    // Cooling line (solid red)
     ctx.save();
     ctx.strokeStyle = '#d32f2f';
     ctx.lineWidth = 3;
@@ -354,16 +569,17 @@ var ChartOverlay = (function () {
     var mx = (px(ea.Tdb) + px(la.Tdb)) / 2;
     var my = (py(ea.W) + py(la.W)) / 2;
     var angle = Math.atan2(py(la.W) - py(ea.W), px(la.Tdb) - px(ea.Tdb));
-    var a = 10;
+    var a = 12;
     ctx.fillStyle = '#d32f2f';
     ctx.beginPath();
-    ctx.moveTo(mx + a * Math.cos(angle),       my + a * Math.sin(angle));
+    ctx.moveTo(mx + a * Math.cos(angle), my + a * Math.sin(angle));
     ctx.lineTo(mx + a * Math.cos(angle + 2.5), my + a * Math.sin(angle + 2.5));
     ctx.lineTo(mx + a * Math.cos(angle - 2.5), my + a * Math.sin(angle - 2.5));
-    ctx.closePath(); ctx.fill();
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
 
-    // ADP extension (dashed) if available
+    // ADP extension (dashed)
     if (result.adp) {
       ctx.save();
       ctx.setLineDash([6, 5]);
@@ -382,7 +598,23 @@ var ChartOverlay = (function () {
     drawPoint(ea.Tdb, ea.W, '#d32f2f', 'Entering', 12, -10);
   }
 
-  return { sync: sync, clear: clear, draw: draw };
+  function drawPoint(Tdb, W, color, label, offsetX, offsetY) {
+    var x = px(Tdb), y = py(W), r = 7;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = color;
+    ctx.fillText(label, x + (offsetX || 12), y + (offsetY || -10));
+    ctx.restore();
+  }
+
+  return { setup: setup, draw: drawResult, px: px, py: py };
 })();
 
 // ============================================================
@@ -548,7 +780,7 @@ var UIController = (function () {
 
     lastResult = result;
     updateResults(result);
-    ChartOverlay.draw(result);
+    PsychroChart.draw(result);
   }
 
   function updateResults(r) {
@@ -615,30 +847,8 @@ var UIController = (function () {
   }
 
   function init() {
-    var img = document.getElementById('chart-bg');
-    var cvs = document.getElementById('chart-overlay');
-
-    function syncCanvas() {
-      ChartOverlay.sync(cvs, img);
-      if (lastResult) ChartOverlay.draw(lastResult);
-    }
-
-    img.addEventListener('load', function () {
-      syncCanvas();
-    });
-
-    img.addEventListener('error', function () {
-      showError('Chart image not found. Place "psychrometric-chart.png" in the same folder as index.html.');
-    });
-
-    // If already cached / loaded before listener attached
-    if (img.complete && img.naturalWidth > 0) {
-      syncCanvas();
-    }
-
-    window.addEventListener('resize', function () {
-      if (img.complete && img.naturalWidth > 0) syncCanvas();
-    });
+    var cvs = document.getElementById('chart-canvas');
+    PsychroChart.setup(cvs);
   }
 
   return {
