@@ -120,13 +120,13 @@
 <main>
   <!-- Chart: background image + transparent canvas overlay -->
   <div id="chart-panel">
-    <img id="chart-bg" src="psychrometric-chart.png"
+    <img id="chart-bg" src="psychrometric-chart.png.png"
          alt="Psychrometric Chart" crossorigin="anonymous">
     <canvas id="chart-overlay"></canvas>
   </div>
 
   <aside>
-    <!-- Entering Air -->
+    <!-- All inputs in one card -->
     <div class="card">
       <h2>Entering Air Conditions</h2>
       <div class="form-row">
@@ -141,13 +141,10 @@
       </div>
       <div class="form-group">
         <label>Air Flow (m³/h)</label>
-        <input type="number" id="inp-airflow" placeholder="Required for kW mode" step="1" min="0">
+        <input type="number" id="inp-airflow" placeholder="Required for capacity mode" step="1" min="0">
       </div>
-    </div>
 
-    <!-- Calculation Mode -->
-    <div class="card">
-      <h2>Calculation Mode</h2>
+      <h2 style="margin-top:12px">Calculation Mode</h2>
       <div class="mode-toggle">
         <button id="mode-leaving" class="active" onclick="UIController.setMode('leaving')">Leaving Air Temp</button>
         <button id="mode-capacity" onclick="UIController.setMode('capacity')">Cooling Capacity</button>
