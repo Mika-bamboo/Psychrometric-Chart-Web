@@ -132,9 +132,19 @@
           <input type="number" id="inp-wb-in" value="19.5" step="0.1" min="-5" max="40">
         </div>
       </div>
-      <div class="form-group">
-        <label>Air Flow (m³/h)</label>
-        <input type="number" id="inp-airflow" placeholder="Required for capacity mode" step="1" min="0">
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label>Air Flow</label>
+          <input type="number" id="inp-airflow" placeholder="Required for capacity mode" step="1" min="0">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label>Unit</label>
+          <select id="inp-airflow-unit">
+            <option value="cmh">m³/h</option>
+            <option value="cfm">CFM</option>
+            <option value="ls">L/s</option>
+          </select>
+        </div>
       </div>
 
       <h2 style="margin-top:12px">Calculation Mode</h2>
@@ -755,7 +765,12 @@ var UIController = (function () {
     showError('');
     var dbIn  = val('inp-db-in');
     var wbIn  = val('inp-wb-in');
-    var airflow = val('inp-airflow') || 0;
+    var airflowRaw = val('inp-airflow') || 0;
+    var airflowUnit = document.getElementById('inp-airflow-unit').value;
+    // Convert to m³/h for calculations
+    var airflow = airflowRaw;
+    if (airflowUnit === 'cfm') airflow = airflowRaw * 1.69901;      // 1 CFM = 1.69901 m³/h
+    else if (airflowUnit === 'ls') airflow = airflowRaw * 3.6;      // 1 L/s = 3.6 m³/h
 
     // Common validation
     if (isNaN(dbIn) || isNaN(wbIn)) return showError('Enter entering air DB and WB.');
