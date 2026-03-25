@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Psychrometric Chart — FCU Cooling Line Calculator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f0f2f5; color: #333; line-height: 1.5;
+  }
+  header {
+    background: #1a3a5c; color: #fff; padding: 12px 24px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 1.25rem; font-weight: 600; }
+  header span { font-size: 0.85rem; opacity: 0.8; }
+  main { display: flex; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  #chart-panel {
+    flex: 2; background: #fff; border-radius: 8px; padding: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 0;
+  }
+  #chart-panel canvas { width: 100%; height: auto; display: block; }
+  aside {
+    flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .card {
+    background: #fff; border-radius: 8px; padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  .card h2 { font-size: 0.95rem; margin-bottom: 10px; color: #1a3a5c; border-bottom: 2px solid #e8ecf1; padding-bottom: 6px; }
+  .form-group { margin-bottom: 8px; }
+  .form-group label { display: block; font-size: 0.8rem; font-weight: 500; color: #555; margin-bottom: 2px; }
+  .form-group input {
+    width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 0.9rem; transition: border-color 0.2s;
+  }
+  .form-group input:focus { outline: none; border-color: #1a3a5c; }
+  .form-row { display: flex; gap: 8px; }
+  .form-row .form-group { flex: 1; }
+  .btn {
+    display: inline-block; padding: 8px 16px; border: none; border-radius: 4px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s;
+  }
+  .btn-primary { background: #1a3a5c; color: #fff; width: 100%; }
+  .btn-primary:hover { background: #254d73; }
+  .btn-secondary { background: #e8ecf1; color: #1a3a5c; width: 100%; margin-top: 6px; }
+  .btn-secondary:hover { background: #d3d9e3; }
+  .results-table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
+  .results-table td { padding: 4px 0; }
+  .results-table td:first-child { color: #777; }
+  .results-table td:last-child { text-align: right; font-weight: 600; }
+  .section-label { font-size: 0.8rem; font-weight: 600; color: #1a3a5c; padding: 6px 0 2px; }
+  .error-msg { color: #d32f2f; font-size: 0.78rem; margin-top: 2px; display: none; }
+  @media (max-width: 900px) {
+    main { flex-direction: column; }
+    aside { flex: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Psychrometric Chart</h1>
+  <span>FCU Cooling Line Calculator</span>
+</header>
+
+<main>
+  <div id="chart-panel">
+    <canvas id="psychChart" width="900" height="650"></canvas>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2>Entering Air Conditions</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Dry-Bulb Temp (°C)</label>
+          <input type="number" id="inp-db" value="27" step="0.1" min="0" max="50">
+        </div>
+        <div class="form-group">
+          <label>Wet-Bulb Temp (°C)</label>
+          <input type="number" id="inp-wb" value="19.5" step="0.1" min="0" max="50">
+        </div>
+      </div>
+
+      <h2 style="margin-top:12px">Water Conditions</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>EWT (°C)</label>
+          <input type="number" id="inp-ewt" value="7" step="0.1" min="0" max="30">
+        </div>
+        <div class="form-group">
+          <label>LWT (°C)</label>
+          <input type="number" id="inp-lwt" value="12" step="0.1" min="0" max="30">
+        </div>
+      </div>
+
+      <h2 style="margin-top:12px">Optional</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Air Flow (m³/h)</label>
+          <input type="number" id="inp-airflow" placeholder="—" step="1" min="0">
+        </div>
+        <div class="form-group">
+          <label>Bypass Factor</label>
+          <input type="number" id="inp-bf" placeholder="Auto" step="0.01" min="0" max="1">
+        </div>
+      </div>
+
+      <div id="error-box" class="error-msg"></div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="UIController.onCalculate()">Calculate</button>
+      <button class="btn btn-secondary" onclick="UIController.onExportPDF()">Export PDF</button>
+    </div>
+
+    <div class="card" id="results-card">
+      <h2>Results</h2>
+      <div class="section-label">Leaving Air Conditions</div>
+      <table class="results-table">
+        <tr><td>Dry-Bulb</td><td id="res-db">—</td></tr>
+        <tr><td>Wet-Bulb</td><td id="res-wb">—</td></tr>
+        <tr><td>Relative Humidity</td><td id="res-rh">—</td></tr>
+        <tr><td>Humidity Ratio</td><td id="res-w">—</td></tr>
+        <tr><td>Enthalpy</td><td id="res-h">—</td></tr>
+      </table>
+      <div class="section-label" style="margin-top:8px">Cooling Capacity</div>
+      <table class="results-table">
+        <tr><td>Total (Qt)</td><td id="res-qt">—</td></tr>
+        <tr><td>Sensible (Qs)</td><td id="res-qs">—</td></tr>
+        <tr><td>Latent (Ql)</td><td id="res-ql">—</td></tr>
+        <tr><td>SHR</td><td id="res-shr">—</td></tr>
+      </table>
+      <div class="section-label" style="margin-top:8px">ADP</div>
+      <table class="results-table">
+        <tr><td>ADP Temp</td><td id="res-adp-t">—</td></tr>
+        <tr><td>ADP Humidity Ratio</td><td id="res-adp-w">—</td></tr>
+      </table>
+    </div>
+  </aside>
+</main>
+
+<script>
+// ============================================================
+// Psychrometric Engine — pure math, ASHRAE fundamentals
+// All W values in kg/kg internally. Display uses g/kg.
+// Pressure: 101.325 kPa (standard atmosphere)
+// ============================================================
+var Psychro = (function () {
+  var P_ATM = 101.325; // kPa
+
+  function saturationPressure(T) {
+    // Magnus approximation, T in °C, returns kPa
+    return 0.6108 * Math.exp(17.27 * T / (T + 237.3));
+  }
+
+  function humidityRatioFromRH(Tdb, RH) {
+    // RH as fraction 0-1, returns kg/kg
+    var Ps = saturationPressure(Tdb);
+    var Pw = RH * Ps;
+    return 0.622 * Pw / (P_ATM - Pw);
+  }
+
+  function saturationHumidityRatio(T) {
+    return humidityRatioFromRH(T, 1.0);
+  }
+
+  function humidityRatioFromWB(Tdb, Twb) {
+    // Sprung's formula
+    var Wsat_wb = saturationHumidityRatio(Twb);
+    return Wsat_wb - 0.000799 * (Tdb - Twb);
+  }
+
+  function enthalpy(Tdb, W) {
+    // W in kg/kg, returns kJ/kg dry air
+    return 1.006 * Tdb + W * (2501 + 1.86 * Tdb);
+  }
+
+  function relativeHumidity(Tdb, W) {
+    // returns fraction 0-1
+    var Ps = saturationPressure(Tdb);
+    var Pw = W * P_ATM / (0.622 + W);
+    return Math.min(Pw / Ps, 1.0);
+  }
+
+  function dewPoint(W) {
+    // From humidity ratio, find dew-point temperature
+    var Pw = W * P_ATM / (0.622 + W);
+    if (Pw <= 0) return 0;
+    // Invert Magnus: T = 237.3 * ln(Pw/0.6108) / (17.27 - ln(Pw/0.6108))
+    var a = Math.log(Pw / 0.6108);
+    return 237.3 * a / (17.27 - a);
+  }
+
+  function wetBulbFromTdbW(Tdb, W) {
+    // Bisection solve: find Twb such that humidityRatioFromWB(Tdb, Twb) == W
+    var lo = dewPoint(W) - 1;
+    var hi = Tdb;
+    if (lo < -10) lo = -10;
+    for (var i = 0; i < 60; i++) {
+      var mid = (lo + hi) / 2;
+      var Wcalc = humidityRatioFromWB(Tdb, mid);
+      if (Wcalc > W) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  function tdbFromEnthalpyW(h, W) {
+    // h = 1.006*T + W*(2501 + 1.86*T) => T = (h - 2501*W) / (1.006 + 1.86*W)
+    return (h - 2501 * W) / (1.006 + 1.86 * W);
+  }
+
+  return {
+    P_ATM: P_ATM,
+    saturationPressure: saturationPressure,
+    humidityRatioFromRH: humidityRatioFromRH,
+    saturationHumidityRatio: saturationHumidityRatio,
+    humidityRatioFromWB: humidityRatioFromWB,
+    enthalpy: enthalpy,
+    relativeHumidity: relativeHumidity,
+    dewPoint: dewPoint,
+    wetBulbFromTdbW: wetBulbFromTdbW,
+    tdbFromEnthalpyW: tdbFromEnthalpyW
+  };
+})();
+
+// ============================================================
+// Chart Renderer — draws psychrometric chart on canvas
+// ============================================================
+var ChartRenderer = (function () {
+  var TDB_MIN = 0, TDB_MAX = 50;     // °C
+  var W_MIN = 0, W_MAX = 0.030;      // kg/kg (0-30 g/kg)
+  var margin = { top: 40, right: 50, bottom: 55, left: 65 };
+  var plotW, plotH, dpr;
+
+  function init(canvas) {
+    dpr = window.devicePixelRatio || 1;
+    var cssW = canvas.clientWidth || 900;
+    var cssH = canvas.clientHeight || 650;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    plotW = canvas.width - margin.left * dpr - margin.right * dpr;
+    plotH = canvas.height - margin.top * dpr - margin.bottom * dpr;
+  }
+
+  function xScale(Tdb) {
+    return margin.left * dpr + (Tdb - TDB_MIN) / (TDB_MAX - TDB_MIN) * plotW;
+  }
+
+  function yScale(W) {
+    return (margin.top * dpr + plotH) - (W - W_MIN) / (W_MAX - W_MIN) * plotH;
+  }
+
+  function drawAxes(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#555';
+    var fs = 11 * dpr;
+    ctx.font = fs + 'px sans-serif';
+
+    // DB axis ticks & grid
+    for (var t = TDB_MIN; t <= TDB_MAX; t += 5) {
+      var x = xScale(t);
+      ctx.beginPath(); ctx.moveTo(x, yScale(W_MIN)); ctx.lineTo(x, yScale(W_MAX)); ctx.stroke();
+      ctx.fillText(t + '', x - (t >= 10 ? 7 * dpr : 4 * dpr), yScale(W_MIN) + 16 * dpr);
+    }
+    // W axis ticks & grid
+    for (var w = 0; w <= 30; w += 5) {
+      var y = yScale(w / 1000);
+      ctx.beginPath(); ctx.moveTo(xScale(TDB_MIN), y); ctx.lineTo(xScale(TDB_MAX), y); ctx.stroke();
+      ctx.fillText(w + '', xScale(TDB_MIN) - 28 * dpr, y + 4 * dpr);
+    }
+
+    // Axis labels
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold ' + (12 * dpr) + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Dry-Bulb Temperature (°C)', xScale((TDB_MIN + TDB_MAX) / 2), yScale(W_MIN) + 42 * dpr);
+    ctx.save();
+    ctx.translate(18 * dpr, yScale((W_MIN + W_MAX) / 2));
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Humidity Ratio (g/kg)', 0, 0);
+    ctx.restore();
+
+    // Border
+    ctx.strokeStyle = '#999';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(xScale(TDB_MIN), yScale(W_MAX), plotW, plotH);
+    ctx.restore();
+  }
+
+  function drawRHCurves(ctx) {
+    var rhValues = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+    ctx.save();
+    for (var ri = 0; ri < rhValues.length; ri++) {
+      var rh = rhValues[ri];
+      ctx.beginPath();
+      ctx.strokeStyle = rh === 1.0 ? '#1a3a5c' : '#6aa3d5';
+      ctx.lineWidth = rh === 1.0 ? 2.5 * dpr : 1.2 * dpr;
+      var started = false;
+      var labelX, labelY;
+      for (var t = TDB_MIN; t <= TDB_MAX; t += 0.5) {
+        var w = Psychro.humidityRatioFromRH(t, rh);
+        if (w < W_MIN || w > W_MAX) continue;
+        var px = xScale(t), py = yScale(w);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+        labelX = px; labelY = py;
+      }
+      ctx.stroke();
+      // Label
+      if (started && rh < 1.0) {
+        ctx.fillStyle = '#6aa3d5';
+        ctx.font = (10 * dpr) + 'px sans-serif';
+        ctx.fillText(Math.round(rh * 100) + '%', labelX + 3 * dpr, labelY + 3 * dpr);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawWBLines(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#a0c4a0';
+    ctx.lineWidth = 0.8 * dpr;
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    var wbValues = [5, 10, 15, 20, 25, 30];
+    for (var wi = 0; wi < wbValues.length; wi++) {
+      var wb = wbValues[wi];
+      ctx.beginPath();
+      var started = false;
+      // Start at saturation point
+      var wSat = Psychro.saturationHumidityRatio(wb);
+      if (wSat > W_MAX) continue;
+      for (var t = wb; t <= TDB_MAX; t += 0.5) {
+        var w = Psychro.humidityRatioFromWB(t, wb);
+        if (w < W_MIN) break;
+        if (w > W_MAX) continue;
+        var px = xScale(t), py = yScale(w);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      // Label at saturation point
+      if (started) {
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#6b9b6b';
+        ctx.font = (9 * dpr) + 'px sans-serif';
+        var lx = xScale(wb), ly = yScale(Math.min(wSat, W_MAX));
+        ctx.fillText(wb + '°C', lx - 18 * dpr, ly - 4 * dpr);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawEnthalpyLines(ctx) {
+    ctx.save();
+    ctx.strokeStyle = '#d4a574';
+    ctx.lineWidth = 0.7 * dpr;
+    ctx.setLineDash([2 * dpr, 4 * dpr]);
+    var hValues = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110];
+    for (var hi = 0; hi < hValues.length; hi++) {
+      var h = hValues[hi];
+      // At W=0: T = h / 1.006
+      var t0 = Psychro.tdbFromEnthalpyW(h, 0);
+      // Find intersection with saturation curve or W_MAX
+      // Walk along enthalpy line from high W down
+      ctx.beginPath();
+      var started = false;
+      for (var w = W_MAX; w >= W_MIN; w -= 0.0002) {
+        var t = Psychro.tdbFromEnthalpyW(h, w);
+        if (t < TDB_MIN || t > TDB_MAX) continue;
+        // Check if above saturation
+        var wSat = Psychro.saturationHumidityRatio(t);
+        if (w > wSat) continue;
+        if (w > W_MAX) continue;
+        var px = xScale(t), py = yScale(w);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      // Label near W=0 end
+      if (t0 >= TDB_MIN && t0 <= TDB_MAX) {
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#b8875a';
+        ctx.font = (9 * dpr) + 'px sans-serif';
+        ctx.fillText(h + '', xScale(t0) + 2 * dpr, yScale(0) + 14 * dpr);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawStatePoint(ctx, Tdb, W, color, label) {
+    var px = xScale(Tdb), py = yScale(W);
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, 6 * dpr, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2 * dpr;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = 'bold ' + (11 * dpr) + 'px sans-serif';
+    ctx.fillText(label, px + 10 * dpr, py - 8 * dpr);
+    ctx.restore();
+  }
+
+  function drawCoolingLine(ctx, entering, leaving, adp) {
+    ctx.save();
+    ctx.strokeStyle = '#d32f2f';
+    ctx.lineWidth = 2.5 * dpr;
+    ctx.setLineDash([]);
+    // Draw line from entering through leaving to ADP
+    ctx.beginPath();
+    ctx.moveTo(xScale(entering.Tdb), yScale(entering.W));
+    ctx.lineTo(xScale(leaving.Tdb), yScale(leaving.W));
+    // Dashed extension to ADP
+    ctx.stroke();
+    ctx.setLineDash([5 * dpr, 4 * dpr]);
+    ctx.strokeStyle = '#d32f2f88';
+    ctx.beginPath();
+    ctx.moveTo(xScale(leaving.Tdb), yScale(leaving.W));
+    ctx.lineTo(xScale(adp.Tdb), yScale(adp.W));
+    ctx.stroke();
+    ctx.restore();
+
+    // Arrow on cooling line
+    ctx.save();
+    var dx = xScale(leaving.Tdb) - xScale(entering.Tdb);
+    var dy = yScale(leaving.W) - yScale(entering.W);
+    var len = Math.sqrt(dx * dx + dy * dy);
+    var mx = (xScale(entering.Tdb) + xScale(leaving.Tdb)) / 2;
+    var my = (yScale(entering.W) + yScale(leaving.W)) / 2;
+    var angle = Math.atan2(dy, dx);
+    var arrSize = 8 * dpr;
+    ctx.fillStyle = '#d32f2f';
+    ctx.beginPath();
+    ctx.moveTo(mx + arrSize * Math.cos(angle), my + arrSize * Math.sin(angle));
+    ctx.lineTo(mx + arrSize * Math.cos(angle + 2.5), my + arrSize * Math.sin(angle + 2.5));
+    ctx.lineTo(mx + arrSize * Math.cos(angle - 2.5), my + arrSize * Math.sin(angle - 2.5));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Draw state points
+    drawStatePoint(ctx, adp.Tdb, adp.W, '#ff9800', 'ADP');
+    drawStatePoint(ctx, leaving.Tdb, leaving.W, '#2196f3', 'Leaving');
+    drawStatePoint(ctx, entering.Tdb, entering.W, '#d32f2f', 'Entering');
+  }
+
+  function render(canvas, result) {
+    init(canvas);
+    var ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    drawAxes(ctx);
+    drawEnthalpyLines(ctx);
+    drawWBLines(ctx);
+    drawRHCurves(ctx);
+
+    if (result) {
+      drawCoolingLine(ctx, result.entering, result.leaving, result.adp);
+    }
+  }
+
+  return { render: render };
+})();
+
+// ============================================================
+// FCU Calculator — cooling line logic
+// ============================================================
+var FCUCalculator = (function () {
+  function calculate(Tdb_ea, Twb_ea, EWT, LWT, airflowM3h, bypassFactor) {
+    // Entering air state
+    var W_ea = Psychro.humidityRatioFromWB(Tdb_ea, Twb_ea);
+    var h_ea = Psychro.enthalpy(Tdb_ea, W_ea);
+    var RH_ea = Psychro.relativeHumidity(Tdb_ea, W_ea);
+
+    // ADP estimation: average water temp + 1°C approach
+    var T_ADP = (EWT + LWT) / 2 + 1;
+    if (T_ADP < 0) T_ADP = 0;
+    var W_ADP = Psychro.saturationHumidityRatio(T_ADP);
+    var h_ADP = Psychro.enthalpy(T_ADP, W_ADP);
+
+    // Bypass factor
+    var BF;
+    if (bypassFactor !== null && bypassFactor !== undefined && !isNaN(bypassFactor)) {
+      BF = bypassFactor;
+    } else {
+      // Estimate BF from EWT
+      BF = Math.max(0.05, Math.min(0.3, 0.05 + 0.015 * (EWT - 5)));
+    }
+
+    // Leaving air conditions
+    var Tdb_la = T_ADP + BF * (Tdb_ea - T_ADP);
+    var W_la = W_ADP + BF * (W_ea - W_ADP);
+    var h_la = Psychro.enthalpy(Tdb_la, W_la);
+    var RH_la = Psychro.relativeHumidity(Tdb_la, W_la);
+    var Twb_la = Psychro.wetBulbFromTdbW(Tdb_la, W_la);
+
+    var result = {
+      entering: { Tdb: Tdb_ea, Twb: Twb_ea, W: W_ea, h: h_ea, RH: RH_ea },
+      leaving: { Tdb: Tdb_la, Twb: Twb_la, W: W_la, h: h_la, RH: RH_la },
+      adp: { Tdb: T_ADP, W: W_ADP, h: h_ADP },
+      BF: BF,
+      Qt: null, Qs: null, Ql: null, SHR: null
+    };
+
+    // Capacity calculation if airflow provided
+    if (airflowM3h && airflowM3h > 0) {
+      var mdot = airflowM3h / 3600 * 1.2; // kg/s
+      var Qt = mdot * (h_ea - h_la);       // kW
+      var Qs = mdot * 1.006 * (Tdb_ea - Tdb_la); // kW
+      var Ql = Qt - Qs;
+      result.Qt = Qt;
+      result.Qs = Qs;
+      result.Ql = Ql;
+      result.SHR = Qt > 0 ? Qs / Qt : 0;
+    }
+
+    return result;
+  }
+
+  return { calculate: calculate };
+})();
+
+// ============================================================
+// UI Controller — DOM interaction, events, PDF export
+// ============================================================
+var UIController = (function () {
+  var lastResult = null;
+
+  function fmt(v, d) { return v != null ? v.toFixed(d) : '—'; }
+
+  function showError(msg) {
+    var el = document.getElementById('error-box');
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+  }
+
+  function onCalculate() {
+    showError('');
+    var Tdb = parseFloat(document.getElementById('inp-db').value);
+    var Twb = parseFloat(document.getElementById('inp-wb').value);
+    var EWT = parseFloat(document.getElementById('inp-ewt').value);
+    var LWT = parseFloat(document.getElementById('inp-lwt').value);
+    var airflow = parseFloat(document.getElementById('inp-airflow').value) || 0;
+    var bfInput = document.getElementById('inp-bf').value;
+    var BF = bfInput !== '' ? parseFloat(bfInput) : null;
+
+    // Validation
+    if (isNaN(Tdb) || isNaN(Twb) || isNaN(EWT) || isNaN(LWT)) {
+      return showError('Please fill in all required fields.');
+    }
+    if (Twb > Tdb) return showError('Wet-bulb cannot exceed dry-bulb temperature.');
+    if (Tdb < 0 || Tdb > 50) return showError('Dry-bulb must be between 0 and 50 °C.');
+    if (Twb < 0) return showError('Wet-bulb must be ≥ 0 °C.');
+    if (EWT >= LWT) return showError('EWT must be less than LWT.');
+    if (BF !== null && (BF < 0 || BF > 1)) return showError('Bypass factor must be 0–1.');
+
+    var result = FCUCalculator.calculate(Tdb, Twb, EWT, LWT, airflow, BF);
+    lastResult = result;
+
+    // Update results panel
+    document.getElementById('res-db').textContent = fmt(result.leaving.Tdb, 2) + ' °C';
+    document.getElementById('res-wb').textContent = fmt(result.leaving.Twb, 2) + ' °C';
+    document.getElementById('res-rh').textContent = fmt(result.leaving.RH * 100, 1) + ' %';
+    document.getElementById('res-w').textContent = fmt(result.leaving.W * 1000, 2) + ' g/kg';
+    document.getElementById('res-h').textContent = fmt(result.leaving.h, 2) + ' kJ/kg';
+
+    document.getElementById('res-qt').textContent = result.Qt != null ? fmt(result.Qt, 3) + ' kW' : '—';
+    document.getElementById('res-qs').textContent = result.Qs != null ? fmt(result.Qs, 3) + ' kW' : '—';
+    document.getElementById('res-ql').textContent = result.Ql != null ? fmt(result.Ql, 3) + ' kW' : '—';
+    document.getElementById('res-shr').textContent = result.SHR != null ? fmt(result.SHR, 3) : '—';
+
+    document.getElementById('res-adp-t').textContent = fmt(result.adp.Tdb, 2) + ' °C';
+    document.getElementById('res-adp-w').textContent = fmt(result.adp.W * 1000, 2) + ' g/kg';
+
+    // Redraw chart
+    ChartRenderer.render(document.getElementById('psychChart'), result);
+  }
+
+  function onExportPDF() {
+    if (!lastResult) {
+      return showError('Please calculate first before exporting.');
+    }
+    showError('');
+
+    var canvas = document.getElementById('psychChart');
+    var imgData = canvas.toDataURL('image/png');
+
+    var jsPDF = window.jspdf.jsPDF;
+    var pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+    // Title
+    pdf.setFontSize(16);
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Psychrometric Chart — FCU Cooling Line Report', 15, 15);
+
+    // Chart image
+    var pageW = pdf.internal.pageSize.getWidth();
+    var imgW = pageW - 30;
+    var imgH = imgW * (canvas.height / canvas.width);
+    if (imgH > 130) { imgH = 130; imgW = imgH * (canvas.width / canvas.height); }
+    pdf.addImage(imgData, 'PNG', 15, 22, imgW, imgH);
+
+    var y = 22 + imgH + 10;
+    pdf.setFontSize(11);
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Input Conditions', 15, y);
+    y += 6;
+    pdf.setFont(undefined, 'normal');
+    pdf.setFontSize(10);
+
+    var r = lastResult;
+    var lines = [
+      'Entering Air: DB = ' + fmt(r.entering.Tdb, 1) + ' °C, WB = ' + fmt(r.entering.Twb, 1) + ' °C, RH = ' + fmt(r.entering.RH * 100, 1) + ' %',
+      'Water: EWT = ' + document.getElementById('inp-ewt').value + ' °C, LWT = ' + document.getElementById('inp-lwt').value + ' °C',
+      'Bypass Factor: ' + fmt(r.BF, 3)
+    ];
+    for (var i = 0; i < lines.length; i++) {
+      pdf.text(lines[i], 15, y); y += 5;
+    }
+
+    y += 3;
+    pdf.setFont(undefined, 'bold');
+    pdf.text('Results — Leaving Air', 15, y); y += 6;
+    pdf.setFont(undefined, 'normal');
+    var rlines = [
+      'DB = ' + fmt(r.leaving.Tdb, 2) + ' °C, WB = ' + fmt(r.leaving.Twb, 2) + ' °C',
+      'RH = ' + fmt(r.leaving.RH * 100, 1) + ' %, W = ' + fmt(r.leaving.W * 1000, 2) + ' g/kg, h = ' + fmt(r.leaving.h, 2) + ' kJ/kg',
+      'ADP = ' + fmt(r.adp.Tdb, 2) + ' °C'
+    ];
+    if (r.Qt != null) {
+      rlines.push('Qt = ' + fmt(r.Qt, 3) + ' kW, Qs = ' + fmt(r.Qs, 3) + ' kW, Ql = ' + fmt(r.Ql, 3) + ' kW, SHR = ' + fmt(r.SHR, 3));
+    }
+    for (var j = 0; j < rlines.length; j++) {
+      pdf.text(rlines[j], 15, y); y += 5;
+    }
+
+    pdf.save('psychrometric-report.pdf');
+  }
+
+  function init() {
+    var canvas = document.getElementById('psychChart');
+    ChartRenderer.render(canvas, null);
+  }
+
+  return {
+    onCalculate: onCalculate,
+    onExportPDF: onExportPDF,
+    init: init
+  };
+})();
+
+document.addEventListener('DOMContentLoaded', UIController.init);
+</script>
+</body>
+</html>
