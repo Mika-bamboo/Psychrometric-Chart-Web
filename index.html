@@ -303,7 +303,7 @@ var PsychroChart = (function () {
 
   // Canvas / layout
   var CW = 1200, CH = 750;
-  var MARGIN = { top: 40, right: 70, bottom: 55, left: 60 };
+  var MARGIN = { top: 40, right: 70, bottom: 55, left: 90 };
   var plotL, plotR, plotT, plotB, plotW, plotH;
 
   var canvas, ctx;
@@ -355,6 +355,7 @@ var PsychroChart = (function () {
     ctx.restore(); // unclip
 
     drawAxes();
+    drawEnthalpyScale();
     drawTitle();
   }
 
@@ -484,8 +485,6 @@ var PsychroChart = (function () {
       ctx.lineWidth = hVal % 20 === 0 ? 0.8 : 0.4;
       ctx.beginPath();
       var started = false;
-      var labelX = 0, labelY = 0, labelAngle = 0;
-      var prevX = 0, prevY = 0;
 
       for (var w = W_MIN; w <= W_MAX; w += 0.0005) {
         var t = Psychro.Tdb_from_hW(hVal, w);
@@ -493,29 +492,52 @@ var PsychroChart = (function () {
         var x = px(t), y = py(w);
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
-
-        // Capture a label position near the top of the line
-        if (w > 0.0005 && w < 0.002) {
-          labelX = x; labelY = y;
-          labelAngle = Math.atan2(y - prevY, x - prevX);
-        }
-        prevX = x; prevY = y;
       }
       ctx.stroke();
+    }
+  }
 
-      // Label the enthalpy line
-      if (labelX && labelY && hVal >= 10) {
+  function drawEnthalpyScale() {
+    // Draw enthalpy tick marks and labels on the left edge of the chart
+    // Each enthalpy line intersects the left boundary (Tdb = DB_MIN)
+    // at W = (h - 1.006 * DB_MIN) / (2501 + 1.86 * DB_MIN)
+    ctx.strokeStyle = '#7B1FA2';
+    ctx.lineWidth = 1;
+
+    for (var hVal = 0; hVal <= 120; hVal += 5) {
+      var w = (hVal - 1.006 * DB_MIN) / (2501 + 1.86 * DB_MIN);
+      if (w < W_MIN || w > W_MAX) continue;
+      var y = py(w);
+
+      // Tick mark extending left from plot edge
+      var tickLen = hVal % 10 === 0 ? 10 : 5;
+      ctx.beginPath();
+      ctx.moveTo(plotL, y);
+      ctx.lineTo(plotL - tickLen, y);
+      ctx.stroke();
+
+      // Label for major ticks (every 10 kJ/kg)
+      if (hVal % 10 === 0) {
         ctx.save();
-        ctx.translate(labelX, labelY);
-        ctx.rotate(labelAngle);
-        ctx.font = '10px sans-serif';
+        ctx.font = '11px sans-serif';
         ctx.fillStyle = '#7B1FA2';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(hVal + ' kJ/kg', 0, -3);
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(hVal, plotL - 13, y);
         ctx.restore();
       }
     }
+
+    // Axis label (rotated)
+    ctx.save();
+    ctx.translate(plotL - 70, (plotT + plotB) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#7B1FA2';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Specific Enthalpy (kJ/kg)', 0, 0);
+    ctx.restore();
   }
 
   function drawAxes() {
