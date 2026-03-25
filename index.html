@@ -120,8 +120,8 @@
 <main>
   <!-- Chart: background image + transparent canvas overlay -->
   <div id="chart-panel">
-    <img id="chart-bg" src="psychrometric-chart.png.png"
-         alt="Psychrometric Chart" crossorigin="anonymous">
+    <img id="chart-bg" src="psychrometric-chart.png"
+         alt="Psychrometric Chart">
     <canvas id="chart-overlay"></canvas>
   </div>
 
@@ -576,7 +576,7 @@ var UIController = (function () {
     showError('');
 
     var panel = document.getElementById('chart-panel');
-    html2canvas(panel, { useCORS: true, scale: 2 }).then(function (shotCanvas) {
+    html2canvas(panel, { scale: 2, allowTaint: true }).then(function (shotCanvas) {
       var imgData = shotCanvas.toDataURL('image/png');
       var jsPDF = window.jspdf.jsPDF;
       var pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
@@ -623,13 +623,21 @@ var UIController = (function () {
       if (lastResult) ChartOverlay.draw(lastResult);
     }
 
+    img.addEventListener('load', function () {
+      syncCanvas();
+    });
+
+    img.addEventListener('error', function () {
+      showError('Chart image not found. Place "psychrometric-chart.png" in the same folder as index.html.');
+    });
+
+    // If already cached / loaded before listener attached
     if (img.complete && img.naturalWidth > 0) {
       syncCanvas();
-    } else {
-      img.addEventListener('load', syncCanvas);
     }
+
     window.addEventListener('resize', function () {
-      if (img.naturalWidth > 0) syncCanvas();
+      if (img.complete && img.naturalWidth > 0) syncCanvas();
     });
   }
 
