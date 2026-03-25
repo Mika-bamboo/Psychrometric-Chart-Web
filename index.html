@@ -569,27 +569,46 @@ var PsychroChart = (function () {
 
     var ea = result.entering, la = result.leaving;
 
-    // Cooling line (solid red)
+    // Find the condensation onset point:
+    // Sensible cooling at constant W until RH reaches ~95%
+    var condenseTdb = findTdbAtRH(ea.W, 0.95);
+    var condenseW = ea.W;
+
+    // If leaving DB is above condensation point, it's pure sensible cooling
+    var isSensibleOnly = la.Tdb >= condenseTdb || la.W >= ea.W;
+
     ctx.save();
     ctx.strokeStyle = '#d32f2f';
     ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(px(ea.Tdb), py(ea.W));
-    ctx.lineTo(px(la.Tdb), py(la.W));
-    ctx.stroke();
 
-    // Arrow at midpoint
-    var mx = (px(ea.Tdb) + px(la.Tdb)) / 2;
-    var my = (py(ea.W) + py(la.W)) / 2;
-    var angle = Math.atan2(py(la.W) - py(ea.W), px(la.Tdb) - px(ea.Tdb));
-    var a = 12;
-    ctx.fillStyle = '#d32f2f';
-    ctx.beginPath();
-    ctx.moveTo(mx + a * Math.cos(angle), my + a * Math.sin(angle));
-    ctx.lineTo(mx + a * Math.cos(angle + 2.5), my + a * Math.sin(angle + 2.5));
-    ctx.lineTo(mx + a * Math.cos(angle - 2.5), my + a * Math.sin(angle - 2.5));
-    ctx.closePath();
-    ctx.fill();
+    if (isSensibleOnly) {
+      // Single horizontal (or near-horizontal) line
+      ctx.beginPath();
+      ctx.moveTo(px(ea.Tdb), py(ea.W));
+      ctx.lineTo(px(la.Tdb), py(la.W));
+      ctx.stroke();
+
+      drawArrow(px(ea.Tdb), py(ea.W), px(la.Tdb), py(la.W));
+    } else {
+      // Phase 1: Sensible cooling — horizontal from entering to condensation point
+      ctx.beginPath();
+      ctx.moveTo(px(ea.Tdb), py(ea.W));
+      ctx.lineTo(px(condenseTdb), py(condenseW));
+      ctx.stroke();
+
+      drawArrow(px(ea.Tdb), py(ea.W), px(condenseTdb), py(condenseW));
+
+      // Phase 2: Dehumidification — from condensation point down to leaving
+      ctx.beginPath();
+      ctx.moveTo(px(condenseTdb), py(condenseW));
+      ctx.lineTo(px(la.Tdb), py(la.W));
+      ctx.stroke();
+
+      drawArrow(px(condenseTdb), py(condenseW), px(la.Tdb), py(la.W));
+
+      // Mark condensation onset point
+      drawPoint(condenseTdb, condenseW, '#ff9800', 'Dew Pt', -55, -10);
+    }
     ctx.restore();
 
     // ADP extension (dashed)
@@ -609,6 +628,33 @@ var PsychroChart = (function () {
     // State points
     drawPoint(la.Tdb, la.W, '#2196f3', 'Leaving', 12, 18);
     drawPoint(ea.Tdb, ea.W, '#d32f2f', 'Entering', 12, -10);
+  }
+
+  // Find Tdb where RH(Tdb, W) = target RH (bisection at constant W)
+  function findTdbAtRH(W, targetRH) {
+    var Tdp = Psychro.Tdp(W);
+    var lo = Tdp, hi = DB_MAX;
+    for (var i = 0; i < 60; i++) {
+      var m = (lo + hi) / 2;
+      if (Psychro.RH(m, W) > targetRH) hi = m; else lo = m;
+    }
+    return (lo + hi) / 2;
+  }
+
+  function drawArrow(x1, y1, x2, y2) {
+    var mx = (x1 + x2) / 2;
+    var my = (y1 + y2) / 2;
+    var angle = Math.atan2(y2 - y1, x2 - x1);
+    var a = 12;
+    ctx.save();
+    ctx.fillStyle = '#d32f2f';
+    ctx.beginPath();
+    ctx.moveTo(mx + a * Math.cos(angle), my + a * Math.sin(angle));
+    ctx.lineTo(mx + a * Math.cos(angle + 2.5), my + a * Math.sin(angle + 2.5));
+    ctx.lineTo(mx + a * Math.cos(angle - 2.5), my + a * Math.sin(angle - 2.5));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawPoint(Tdb, W, color, label, offsetX, offsetY) {
