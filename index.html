@@ -147,6 +147,18 @@
         </div>
       </div>
 
+      <h2 style="margin-top:12px">Chilled Water Conditions</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label>EWT (°C)</label>
+          <input type="number" id="inp-ewt" value="7" step="0.1" min="0" max="25">
+        </div>
+        <div class="form-group">
+          <label>LWT (°C)</label>
+          <input type="number" id="inp-lwt" value="12" step="0.1" min="0" max="30">
+        </div>
+      </div>
+
       <h2 style="margin-top:12px">Calculation Mode</h2>
       <div class="mode-toggle">
         <button id="mode-leaving" class="active" onclick="UIController.setMode('leaving')">Leaving Air Temp</button>
@@ -169,15 +181,9 @@
 
       <!-- Mode B: Cooling capacity -->
       <div id="panel-capacity" class="hidden">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Total Cooling (kW)</label>
-            <input type="number" id="inp-qt" placeholder="kW" step="0.1" min="0">
-          </div>
-          <div class="form-group">
-            <label>EWT (°C)</label>
-            <input type="number" id="inp-ewt" value="7" step="0.1" min="0" max="25">
-          </div>
+        <div class="form-group">
+          <label>Total Cooling (kW)</label>
+          <input type="number" id="inp-qt" placeholder="kW" step="0.1" min="0">
         </div>
       </div>
 
@@ -206,6 +212,11 @@
         <tr><td>RH</td><td id="res-out-rh">—</td></tr>
         <tr><td>Humidity Ratio</td><td id="res-out-w">—</td></tr>
         <tr><td>Enthalpy</td><td id="res-out-h">—</td></tr>
+      </table>
+
+      <div class="section-label" style="margin-top:8px">Coil / ADP</div>
+      <table class="results-table">
+        <tr><td>ADP</td><td id="res-adp">—</td></tr>
       </table>
 
       <div class="section-label" style="margin-top:8px">Cooling Capacity</div>
@@ -562,56 +573,29 @@ var PsychroChart = (function () {
   }
 
   // ---- Draw cooling line result overlay ----
+  // The FCU coil process is a straight line from entering air toward the ADP
+  // (Apparatus Dew Point on the saturation curve). The leaving air falls on
+  // this line between entering and ADP.
   function drawResult(result) {
     if (!ctx) return;
-    // Redraw base chart then overlay result
     drawBackground();
 
     var ea = result.entering, la = result.leaving;
 
-    // Find the condensation onset point:
-    // Sensible cooling at constant W until RH reaches ~95%
-    var condenseTdb = findTdbAtRH(ea.W, 0.95);
-    var condenseW = ea.W;
-
-    // If leaving DB is above condensation point, it's pure sensible cooling
-    var isSensibleOnly = la.Tdb >= condenseTdb || la.W >= ea.W;
-
+    // Solid line: Entering → Leaving
     ctx.save();
     ctx.strokeStyle = '#d32f2f';
     ctx.lineWidth = 3;
-
-    if (isSensibleOnly) {
-      // Single horizontal (or near-horizontal) line
-      ctx.beginPath();
-      ctx.moveTo(px(ea.Tdb), py(ea.W));
-      ctx.lineTo(px(la.Tdb), py(la.W));
-      ctx.stroke();
-
-      drawArrow(px(ea.Tdb), py(ea.W), px(la.Tdb), py(la.W));
-    } else {
-      // Phase 1: Sensible cooling — horizontal from entering to condensation point
-      ctx.beginPath();
-      ctx.moveTo(px(ea.Tdb), py(ea.W));
-      ctx.lineTo(px(condenseTdb), py(condenseW));
-      ctx.stroke();
-
-      drawArrow(px(ea.Tdb), py(ea.W), px(condenseTdb), py(condenseW));
-
-      // Phase 2: Dehumidification — from condensation point down to leaving
-      ctx.beginPath();
-      ctx.moveTo(px(condenseTdb), py(condenseW));
-      ctx.lineTo(px(la.Tdb), py(la.W));
-      ctx.stroke();
-
-      drawArrow(px(condenseTdb), py(condenseW), px(la.Tdb), py(la.W));
-
-      // Mark condensation onset point
-      drawPoint(condenseTdb, condenseW, '#ff9800', 'Dew Pt', -55, -10);
-    }
+    ctx.beginPath();
+    ctx.moveTo(px(ea.Tdb), py(ea.W));
+    ctx.lineTo(px(la.Tdb), py(la.W));
+    ctx.stroke();
     ctx.restore();
 
-    // ADP extension (dashed)
+    // Arrow on the solid segment
+    drawArrow(px(ea.Tdb), py(ea.W), px(la.Tdb), py(la.W), '#d32f2f');
+
+    // Dashed extension: Leaving → ADP
     if (result.adp) {
       ctx.save();
       ctx.setLineDash([6, 5]);
@@ -622,36 +606,24 @@ var PsychroChart = (function () {
       ctx.lineTo(px(result.adp.Tdb), py(result.adp.W));
       ctx.stroke();
       ctx.restore();
-      drawPoint(result.adp.Tdb, result.adp.W, '#ff9800', 'ADP', 12, -10);
+      drawPoint(result.adp.Tdb, result.adp.W, '#ff9800', 'ADP', 12, 5);
     }
 
     // State points
-    drawPoint(la.Tdb, la.W, '#2196f3', 'Leaving', 12, 18);
     drawPoint(ea.Tdb, ea.W, '#d32f2f', 'Entering', 12, -10);
+    drawPoint(la.Tdb, la.W, '#2196f3', 'Leaving', 12, 18);
   }
 
-  // Find Tdb where RH(Tdb, W) = target RH (bisection at constant W)
-  function findTdbAtRH(W, targetRH) {
-    var Tdp = Psychro.Tdp(W);
-    var lo = Tdp, hi = DB_MAX;
-    for (var i = 0; i < 60; i++) {
-      var m = (lo + hi) / 2;
-      if (Psychro.RH(m, W) > targetRH) hi = m; else lo = m;
-    }
-    return (lo + hi) / 2;
-  }
-
-  function drawArrow(x1, y1, x2, y2) {
-    var mx = (x1 + x2) / 2;
-    var my = (y1 + y2) / 2;
+  function drawArrow(x1, y1, x2, y2, color) {
+    var mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     var angle = Math.atan2(y2 - y1, x2 - x1);
-    var a = 12;
+    var len = 10, half = Math.PI * 0.82; // ~148° wing spread
     ctx.save();
-    ctx.fillStyle = '#d32f2f';
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(mx + a * Math.cos(angle), my + a * Math.sin(angle));
-    ctx.lineTo(mx + a * Math.cos(angle + 2.5), my + a * Math.sin(angle + 2.5));
-    ctx.lineTo(mx + a * Math.cos(angle - 2.5), my + a * Math.sin(angle - 2.5));
+    ctx.moveTo(mx + len * Math.cos(angle), my + len * Math.sin(angle));
+    ctx.lineTo(mx + len * Math.cos(angle + half), my + len * Math.sin(angle + half));
+    ctx.lineTo(mx + len * Math.cos(angle - half), my + len * Math.sin(angle - half));
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -681,8 +653,15 @@ var PsychroChart = (function () {
 // ============================================================
 var FCUCalc = (function () {
 
-  /** Mode A: user provides leaving air DB & WB */
-  function fromLeavingAir(dbIn, wbIn, dbOut, wbOut, airflow) {
+  /** Calculate ADP from water temperatures.
+   *  ADP ≈ EWT + approach.  Typical approach = 1 °C. */
+  function calcADP(ewt) {
+    var Tadp = ewt + 1;
+    return { Tdb: Tadp, W: Psychro.Wsat(Tadp) };
+  }
+
+  /** Mode A: user provides leaving air DB & WB + water temps */
+  function fromLeavingAir(dbIn, wbIn, dbOut, wbOut, airflow, ewt, lwt) {
     var Wi  = Psychro.W_from_WB(dbIn, wbIn);
     var hi  = Psychro.h(dbIn, Wi);
     var RHi = Psychro.RH(dbIn, Wi);
@@ -691,10 +670,12 @@ var FCUCalc = (function () {
     var ho  = Psychro.h(dbOut, Wo);
     var RHo = Psychro.RH(dbOut, Wo);
 
+    var adp = calcADP(ewt);
+
     var res = {
       entering: { Tdb: dbIn, Twb: wbIn, W: Wi, h: hi, RH: RHi },
       leaving:  { Tdb: dbOut, Twb: wbOut, W: Wo, h: ho, RH: RHo },
-      adp: null, Qt: null, Qs: null, Ql: null, SHF: null
+      adp: adp, Qt: null, Qs: null, Ql: null, SHF: null
     };
 
     if (airflow && airflow > 0) {
@@ -705,13 +686,11 @@ var FCUCalc = (function () {
       res.SHF = res.Qt > 0 ? res.Qs / res.Qt : 0;
     }
 
-    // Estimate ADP: extend cooling line to saturation curve
-    res.adp = findADP(dbIn, Wi, dbOut, Wo);
     return res;
   }
 
-  /** Mode B: user provides total cooling capacity (kW) */
-  function fromCapacity(dbIn, wbIn, Qt, airflow, ewt) {
+  /** Mode B: user provides total cooling capacity (kW) + water temps */
+  function fromCapacity(dbIn, wbIn, Qt, airflow, ewt, lwt) {
     var Wi  = Psychro.W_from_WB(dbIn, wbIn);
     var hi  = Psychro.h(dbIn, Wi);
     var RHi = Psychro.RH(dbIn, Wi);
@@ -719,15 +698,12 @@ var FCUCalc = (function () {
     var mdot = airflow / 3600 * 1.2; // kg/s
     var ho   = hi - Qt / mdot;       // leaving enthalpy
 
-    // ADP from EWT (apparatus dew point ~ EWT + 1 °C approach)
-    var Tadp = ewt + 1;
-    var Wadp = Psychro.Wsat(Tadp);
+    var adp  = calcADP(ewt);
+    var Tadp = adp.Tdb, Wadp = adp.W;
 
     // Leaving air lies on the line from entering air to ADP
     // at the point where enthalpy = ho.
     // Parametric: T(t) = dbIn + t*(Tadp - dbIn), W(t) = Wi + t*(Wadp - Wi)
-    // h(t) = h(T(t), W(t))
-    // Solve for t using bisection.
     var hadp = Psychro.h(Tadp, Wadp);
     if (ho < hadp) ho = hadp; // clamp: can't cool below ADP
 
@@ -739,12 +715,12 @@ var FCUCalc = (function () {
       var hm = Psychro.h(Tm, Wm);
       if (hm > ho) tLo = tm; else tHi = tm;
     }
-    var t   = (tLo + tHi) / 2;
+    var t    = (tLo + tHi) / 2;
     var dbOut = dbIn + t * (Tadp - dbIn);
     var Wo    = Wi   + t * (Wadp - Wi);
     var hoAct = Psychro.h(dbOut, Wo);
     var RHo   = Psychro.RH(dbOut, Wo);
-    var wbOut  = Psychro.WB_from_TdbW(dbOut, Wo);
+    var wbOut = Psychro.WB_from_TdbW(dbOut, Wo);
 
     var Qs  = mdot * 1.006 * (dbIn - dbOut);
     var Ql  = Qt - Qs;
@@ -753,29 +729,9 @@ var FCUCalc = (function () {
     return {
       entering: { Tdb: dbIn, Twb: wbIn, W: Wi, h: hi, RH: RHi },
       leaving:  { Tdb: dbOut, Twb: wbOut, W: Wo, h: hoAct, RH: RHo },
-      adp:      { Tdb: Tadp, W: Wadp },
+      adp: adp,
       Qt: Qt, Qs: Qs, Ql: Ql, SHF: SHF
     };
-  }
-
-  /** Extend the cooling line to the saturation curve to find ADP */
-  function findADP(db1, W1, db2, W2) {
-    // Direction vector
-    var dDb = db2 - db1, dW = W2 - W1;
-    if (Math.abs(dDb) < 1e-9) return null;
-    // Walk towards lower temp until W >= Wsat(T) (i.e. hit saturation)
-    for (var s = 0; s <= 5; s += 0.005) {
-      var t = db2 + s * dDb;  // continue past leaving point
-      var w = W2  + s * dW;
-      if (t < -5 || w < 0) break;
-      var ws = Psychro.Wsat(t);
-      if (w >= ws) {
-        return { Tdb: t, W: ws };
-      }
-    }
-    // If we didn't find it, return rough estimate
-    var Tdp_in = Psychro.Tdp(W1);
-    return { Tdb: Tdp_in, W: Psychro.Wsat(Tdp_in) };
   }
 
   return { fromLeavingAir: fromLeavingAir, fromCapacity: fromCapacity };
@@ -818,11 +774,16 @@ var UIController = (function () {
     if (airflowUnit === 'cfm') airflow = airflowRaw * 1.69901;      // 1 CFM = 1.69901 m³/h
     else if (airflowUnit === 'ls') airflow = airflowRaw * 3.6;      // 1 L/s = 3.6 m³/h
 
+    var ewt = val('inp-ewt');
+    var lwt = val('inp-lwt');
+
     // Common validation
     if (isNaN(dbIn) || isNaN(wbIn)) return showError('Enter entering air DB and WB.');
     if (wbIn > dbIn) return showError('Wet-bulb cannot exceed dry-bulb.');
     if (dbIn < -5 || dbIn > 40) return showError('DB must be between -5 and 40 °C.');
     if (wbIn < -5) return showError('WB must be >= -5 °C.');
+    if (isNaN(ewt) || isNaN(lwt)) return showError('Enter EWT and LWT.');
+    if (lwt <= ewt) return showError('LWT must be greater than EWT.');
 
     var result;
 
@@ -832,14 +793,12 @@ var UIController = (function () {
       if (isNaN(dbOut) || isNaN(wbOut)) return showError('Enter leaving air DB and WB.');
       if (wbOut > dbOut) return showError('Leaving WB cannot exceed leaving DB.');
       if (dbOut >= dbIn) return showError('Leaving DB must be less than entering DB.');
-      result = FCUCalc.fromLeavingAir(dbIn, wbIn, dbOut, wbOut, airflow);
+      result = FCUCalc.fromLeavingAir(dbIn, wbIn, dbOut, wbOut, airflow, ewt, lwt);
     } else {
-      var Qt  = val('inp-qt');
-      var ewt = val('inp-ewt');
+      var Qt = val('inp-qt');
       if (isNaN(Qt) || Qt <= 0) return showError('Enter a positive cooling capacity.');
       if (!airflow || airflow <= 0) return showError('Air flow is required for capacity mode.');
-      if (isNaN(ewt)) return showError('Enter entering water temperature.');
-      result = FCUCalc.fromCapacity(dbIn, wbIn, Qt, airflow, ewt);
+      result = FCUCalc.fromCapacity(dbIn, wbIn, Qt, airflow, ewt, lwt);
     }
 
     lastResult = result;
@@ -860,6 +819,9 @@ var UIController = (function () {
     document.getElementById('res-out-rh').textContent = fmt(l.RH * 100, 1) + ' %';
     document.getElementById('res-out-w').textContent  = fmt(l.W * 1000, 2) + ' g/kg';
     document.getElementById('res-out-h').textContent  = fmt(l.h, 2) + ' kJ/kg';
+
+    document.getElementById('res-adp').textContent = r.adp
+      ? fmt(r.adp.Tdb, 1) + ' °C / ' + fmt(r.adp.W * 1000, 2) + ' g/kg' : '—';
 
     document.getElementById('res-qt').textContent  = r.Qt != null ? fmt(r.Qt, 3) + ' kW' : '—';
     document.getElementById('res-qs').textContent  = r.Qs != null ? fmt(r.Qs, 3) + ' kW' : '—';
