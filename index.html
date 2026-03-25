@@ -32,6 +32,13 @@
   }
   #chart-canvas {
     display: block; width: 100%; height: auto;
+    cursor: crosshair;
+  }
+  #chart-tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: rgba(26,58,92,0.92); color: #fff; padding: 8px 12px;
+    border-radius: 6px; font-size: 0.78rem; line-height: 1.6;
+    white-space: nowrap; z-index: 10;
   }
 
   /* ---- Side panel ---- */
@@ -116,20 +123,34 @@
   <!-- Chart: fully drawn on canvas -->
   <div id="chart-panel">
     <canvas id="chart-canvas"></canvas>
+    <div id="chart-tooltip"></div>
   </div>
 
   <aside>
     <!-- All inputs in one card -->
     <div class="card">
       <h2>Entering Air Conditions</h2>
+      <div class="form-row" style="margin-bottom:6px">
+        <div class="form-group" style="flex:1">
+          <label>Input Mode</label>
+          <select id="inp-air-mode" onchange="UIController.setAirMode(this.value)">
+            <option value="dbwb">DB + WB</option>
+            <option value="dbrh">DB + RH</option>
+          </select>
+        </div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label>Dry-Bulb (°C)</label>
           <input type="number" id="inp-db-in" value="27" step="0.1" min="-5" max="40">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="grp-wb-in">
           <label>Wet-Bulb (°C)</label>
           <input type="number" id="inp-wb-in" value="19.5" step="0.1" min="-5" max="40">
+        </div>
+        <div class="form-group hidden" id="grp-rh-in">
+          <label>RH (%)</label>
+          <input type="number" id="inp-rh-in" value="50" step="1" min="1" max="100">
         </div>
       </div>
       <div class="form-row">
@@ -201,22 +222,28 @@
       <div class="section-label">Entering Air</div>
       <table class="results-table">
         <tr><td>DB / WB</td><td id="res-in-dbwb">—</td></tr>
+        <tr><td>Dew Point</td><td id="res-in-dp">—</td></tr>
         <tr><td>RH</td><td id="res-in-rh">—</td></tr>
         <tr><td>Humidity Ratio</td><td id="res-in-w">—</td></tr>
         <tr><td>Enthalpy</td><td id="res-in-h">—</td></tr>
+        <tr><td>Sp. Volume</td><td id="res-in-v">—</td></tr>
       </table>
 
       <div class="section-label" style="margin-top:8px">Leaving Air</div>
       <table class="results-table">
         <tr><td>DB / WB</td><td id="res-out-dbwb">—</td></tr>
+        <tr><td>Dew Point</td><td id="res-out-dp">—</td></tr>
         <tr><td>RH</td><td id="res-out-rh">—</td></tr>
         <tr><td>Humidity Ratio</td><td id="res-out-w">—</td></tr>
         <tr><td>Enthalpy</td><td id="res-out-h">—</td></tr>
+        <tr><td>Sp. Volume</td><td id="res-out-v">—</td></tr>
       </table>
 
       <div class="section-label" style="margin-top:8px">Coil / ADP</div>
       <table class="results-table">
         <tr><td>ADP</td><td id="res-adp">—</td></tr>
+        <tr><td>Bypass Factor</td><td id="res-bf">—</td></tr>
+        <tr><td>Contact Factor</td><td id="res-cf">—</td></tr>
       </table>
 
       <div class="section-label" style="margin-top:8px">Cooling Capacity</div>
@@ -286,10 +313,15 @@ var Psychro = (function () {
     return (hv - 2501 * W) / (1.006 + 1.86 * W);
   }
 
+  function v(Tdb, W) {
+    // Specific volume (m³/kg dry air)
+    return 0.287042 * (Tdb + 273.15) * (1 + 1.6078 * W) / P;
+  }
+
   return {
     Psat: Psat, W_from_RH: W_from_RH, Wsat: Wsat,
     W_from_WB: W_from_WB, h: h, RH: RH, Tdp: Tdp,
-    WB_from_TdbW: WB_from_TdbW, Tdb_from_hW: Tdb_from_hW
+    WB_from_TdbW: WB_from_TdbW, Tdb_from_hW: Tdb_from_hW, v: v
   };
 })();
 
@@ -348,6 +380,7 @@ var PsychroChart = (function () {
     ctx.clip();
 
     drawGrid();
+    drawSpecificVolumeLines();
     drawRHCurves();
     drawWBLines();
     drawEnthalpyLines();
@@ -360,22 +393,70 @@ var PsychroChart = (function () {
   }
 
   function drawGrid() {
-    // Vertical grid: DB lines every 5 °C
-    ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 0.5;
-    for (var t = 0; t <= 40; t += 5) {
-      if (t === DB_MIN) continue;
+    // Vertical grid: minor every 1°C, major every 5°C
+    for (var t = DB_MIN; t <= DB_MAX; t += 1) {
+      var isMajor = t % 5 === 0;
+      ctx.strokeStyle = isMajor ? '#d0d0d0' : '#eeeeee';
+      ctx.lineWidth = isMajor ? 0.6 : 0.3;
       ctx.beginPath();
       ctx.moveTo(px(t), plotT);
       ctx.lineTo(px(t), plotB);
       ctx.stroke();
     }
-    // Horizontal grid: W lines every 0.005
-    for (var w = 0.005; w <= W_MAX; w += 0.005) {
+    // Horizontal grid: minor every 0.001, major every 0.005
+    for (var w = 0.001; w <= W_MAX; w += 0.001) {
+      var isMajor = Math.abs(w * 1000 - Math.round(w * 1000 / 5) * 5) < 0.01;
+      ctx.strokeStyle = isMajor ? '#d0d0d0' : '#eeeeee';
+      ctx.lineWidth = isMajor ? 0.6 : 0.3;
       ctx.beginPath();
       ctx.moveTo(plotL, py(w));
       ctx.lineTo(plotR, py(w));
       ctx.stroke();
+    }
+  }
+
+  function drawSpecificVolumeLines() {
+    // Specific volume lines (m³/kg): slightly steeper than enthalpy lines
+    // v = 0.287042 * (Tdb+273.15) * (1+1.6078*W) / P
+    // Solve for W: W = (v*P / (0.287042*(Tdb+273.15)) - 1) / 1.6078
+    for (var vVal = 0.75; vVal <= 0.95; vVal += 0.01) {
+      var isMajor = Math.abs(vVal * 100 - Math.round(vVal * 100 / 5) * 5) < 0.1;
+      ctx.strokeStyle = isMajor ? '#66BB6A' : '#C8E6C9';
+      ctx.lineWidth = isMajor ? 0.7 : 0.3;
+      ctx.beginPath();
+      var started = false;
+
+      for (var t = DB_MIN; t <= DB_MAX; t += 1) {
+        var w = (vVal * P / (0.287042 * (t + 273.15)) - 1) / 1.6078;
+        if (w < W_MIN || w > W_MAX) { started = false; continue; }
+        var x = px(t), y = py(w);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Label major lines at bottom of chart
+      if (isMajor) {
+        var wAtMax = (vVal * P / (0.287042 * (DB_MAX + 273.15)) - 1) / 1.6078;
+        var wAtBottom = 0.001;
+        var tAtBottom = DB_MAX;
+        // Find where line crosses near bottom
+        for (var t2 = DB_MAX; t2 >= DB_MIN; t2 -= 0.5) {
+          var w2 = (vVal * P / (0.287042 * (t2 + 273.15)) - 1) / 1.6078;
+          if (w2 >= W_MIN && w2 <= 0.003) {
+            tAtBottom = t2; wAtBottom = w2; break;
+          }
+        }
+        if (tAtBottom >= DB_MIN && tAtBottom <= DB_MAX) {
+          ctx.save();
+          ctx.font = '9px sans-serif';
+          ctx.fillStyle = '#388E3C';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(vVal.toFixed(2), px(tAtBottom), py(wAtBottom) + 2);
+          ctx.restore();
+        }
+      }
     }
   }
 
@@ -562,37 +643,49 @@ var PsychroChart = (function () {
     ctx.lineTo(plotR, plotT);
     ctx.stroke();
 
-    // DB tick labels
-    ctx.font = '12px sans-serif';
+    // DB tick marks: minor every 1°C, major every 5°C with labels
     ctx.fillStyle = '#333';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    for (var t = -5; t <= 40; t += 5) {
+    for (var t = DB_MIN; t <= DB_MAX; t += 1) {
       var x = px(t);
+      var isMajor = t % 5 === 0;
       ctx.beginPath();
       ctx.moveTo(x, plotB);
-      ctx.lineTo(x, plotB + 6);
+      ctx.lineTo(x, plotB + (isMajor ? 6 : 3));
       ctx.stroke();
-      ctx.fillText(t, x, plotB + 8);
+      if (isMajor) {
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(t, x, plotB + 7);
+      }
     }
 
     // DB axis label
     ctx.font = 'bold 13px sans-serif';
     ctx.fillStyle = '#1a3a5c';
+    ctx.textAlign = 'center';
     ctx.fillText('Dry-Bulb Temperature (°C)', (plotL + plotR) / 2, plotB + 32);
 
-    // W tick labels (right side)
-    ctx.font = '11px sans-serif';
+    // W tick marks: minor every 0.001, major every 0.005 with labels
     ctx.fillStyle = '#333';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    for (var w = 0; w <= 0.030; w += 0.005) {
+    for (var w = 0; w <= W_MAX; w += 0.001) {
       var y = py(w);
+      var isMajor = Math.abs(w * 1000 - Math.round(w * 1000 / 5) * 5) < 0.01;
       ctx.beginPath();
       ctx.moveTo(plotR, y);
-      ctx.lineTo(plotR + 6, y);
+      ctx.lineTo(plotR + (isMajor ? 6 : 3), y);
       ctx.stroke();
-      ctx.fillText(w.toFixed(3), plotR + 9, y);
+      if (isMajor) {
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(w.toFixed(3), plotR + 9, y);
+      } else if (Math.abs(w * 1000 - Math.round(w * 1000 / 2) * 2) < 0.01 && w > 0) {
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(w.toFixed(3), plotR + 5, y);
+      }
     }
 
     // W axis label (right, rotated)
@@ -652,6 +745,35 @@ var PsychroChart = (function () {
       drawPoint(result.adp.Tdb, result.adp.W, '#ff9800', 'ADP', 12, 5);
     }
 
+    // SHF line: shows sensible heat ratio slope from entering point
+    if (result.SHF != null && result.SHF > 0 && result.SHF < 1) {
+      ctx.save();
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = '#558B2F';
+      ctx.lineWidth = 1.5;
+      // SHF = Qs/Qt. Draw a short reference line from entering point
+      // showing the SHF slope direction (horizontal = SHF=1, vertical = SHF=0)
+      // Slope: dW/dTdb = (Qt - Qs) / (Qs) * (1.006 / 2501) approximately
+      var dTdb = ea.Tdb - la.Tdb;
+      var dW = ea.W - la.W;
+      var lineLen = 80; // pixels
+      var mag = Math.sqrt(Math.pow(px(ea.Tdb) - px(la.Tdb), 2) + Math.pow(py(ea.W) - py(la.W), 2));
+      if (mag > 0) {
+        var dx = (px(la.Tdb) - px(ea.Tdb)) / mag * lineLen;
+        var dy = (py(la.W) - py(ea.W)) / mag * lineLen;
+        ctx.beginPath();
+        ctx.moveTo(px(ea.Tdb) - dx * 0.3, py(ea.W) - dy * 0.3);
+        ctx.lineTo(px(ea.Tdb) + dx, py(ea.W) + dy);
+        ctx.stroke();
+        // Label
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillStyle = '#558B2F';
+        ctx.textAlign = 'left';
+        ctx.fillText('SHF=' + result.SHF.toFixed(2), px(ea.Tdb) + dx + 4, py(ea.W) + dy - 4);
+      }
+      ctx.restore();
+    }
+
     // State points
     drawPoint(ea.Tdb, ea.W, '#d32f2f', 'Entering', 12, -10);
     drawPoint(la.Tdb, la.W, '#2196f3', 'Leaving', 12, 18);
@@ -688,7 +810,20 @@ var PsychroChart = (function () {
     ctx.restore();
   }
 
-  return { setup: setup, draw: drawResult, px: px, py: py };
+  // Pixel -> data (inverse of px/py)
+  function invTdb(xPx) {
+    return DB_MIN + (xPx - plotL) / plotW * (DB_MAX - DB_MIN);
+  }
+  function invW(yPx) {
+    return W_MIN + (plotB - yPx) / plotH * (W_MAX - W_MIN);
+  }
+
+  function getLayout() {
+    return { plotL: plotL, plotR: plotR, plotT: plotT, plotB: plotB, CW: CW, CH: CH };
+  }
+
+  return { setup: setup, draw: drawResult, px: px, py: py,
+           invTdb: invTdb, invW: invW, getLayout: getLayout };
 })();
 
 // ============================================================
@@ -795,6 +930,14 @@ var UIController = (function () {
     el.style.display = msg ? 'block' : 'none';
   }
 
+  var airMode = 'dbwb'; // 'dbwb' | 'dbrh'
+
+  function setAirMode(m) {
+    airMode = m;
+    document.getElementById('grp-wb-in').classList.toggle('hidden', m !== 'dbwb');
+    document.getElementById('grp-rh-in').classList.toggle('hidden', m !== 'dbrh');
+  }
+
   function setMode(m) {
     mode = m;
     document.getElementById('mode-leaving').classList.toggle('active', m === 'leaving');
@@ -809,7 +952,16 @@ var UIController = (function () {
   function onCalculate() {
     showError('');
     var dbIn  = val('inp-db-in');
-    var wbIn  = val('inp-wb-in');
+    var wbIn;
+    if (airMode === 'dbrh') {
+      var rhIn = val('inp-rh-in');
+      if (isNaN(dbIn) || isNaN(rhIn)) return showError('Enter DB and RH.');
+      if (rhIn < 1 || rhIn > 100) return showError('RH must be between 1 and 100%.');
+      var Wi = Psychro.W_from_RH(dbIn, rhIn / 100);
+      wbIn = Psychro.WB_from_TdbW(dbIn, Wi);
+    } else {
+      wbIn = val('inp-wb-in');
+    }
     var airflowRaw = val('inp-airflow') || 0;
     var airflowUnit = document.getElementById('inp-airflow-unit').value;
     // Convert to m³/h for calculations
@@ -853,18 +1005,32 @@ var UIController = (function () {
     var e = r.entering, l = r.leaving;
     document.getElementById('res-in-dbwb').textContent =
       fmt(e.Tdb, 1) + ' / ' + fmt(e.Twb, 1) + ' °C';
-    document.getElementById('res-in-rh').textContent = fmt(e.RH * 100, 1) + ' %';
-    document.getElementById('res-in-w').textContent  = fmt(e.W * 1000, 2) + ' g/kg';
-    document.getElementById('res-in-h').textContent  = fmt(e.h, 2) + ' kJ/kg';
+    document.getElementById('res-in-dp').textContent  = fmt(Psychro.Tdp(e.W), 1) + ' °C';
+    document.getElementById('res-in-rh').textContent  = fmt(e.RH * 100, 1) + ' %';
+    document.getElementById('res-in-w').textContent   = fmt(e.W * 1000, 2) + ' g/kg';
+    document.getElementById('res-in-h').textContent   = fmt(e.h, 2) + ' kJ/kg';
+    document.getElementById('res-in-v').textContent   = fmt(Psychro.v(e.Tdb, e.W), 4) + ' m³/kg';
 
     document.getElementById('res-out-dbwb').textContent =
       fmt(l.Tdb, 1) + ' / ' + fmt(l.Twb, 1) + ' °C';
-    document.getElementById('res-out-rh').textContent = fmt(l.RH * 100, 1) + ' %';
-    document.getElementById('res-out-w').textContent  = fmt(l.W * 1000, 2) + ' g/kg';
-    document.getElementById('res-out-h').textContent  = fmt(l.h, 2) + ' kJ/kg';
+    document.getElementById('res-out-dp').textContent  = fmt(Psychro.Tdp(l.W), 1) + ' °C';
+    document.getElementById('res-out-rh').textContent  = fmt(l.RH * 100, 1) + ' %';
+    document.getElementById('res-out-w').textContent   = fmt(l.W * 1000, 2) + ' g/kg';
+    document.getElementById('res-out-h').textContent   = fmt(l.h, 2) + ' kJ/kg';
+    document.getElementById('res-out-v').textContent   = fmt(Psychro.v(l.Tdb, l.W), 4) + ' m³/kg';
 
     document.getElementById('res-adp').textContent = r.adp
       ? fmt(r.adp.Tdb, 1) + ' °C / ' + fmt(r.adp.W * 1000, 2) + ' g/kg' : '—';
+
+    // Bypass Factor: BF = (Tdb_out - Tadp) / (Tdb_in - Tadp)
+    if (r.adp && r.adp.Tdb < e.Tdb) {
+      var bf = (l.Tdb - r.adp.Tdb) / (e.Tdb - r.adp.Tdb);
+      document.getElementById('res-bf').textContent = fmt(bf, 3);
+      document.getElementById('res-cf').textContent = fmt(1 - bf, 3);
+    } else {
+      document.getElementById('res-bf').textContent = '—';
+      document.getElementById('res-cf').textContent = '—';
+    }
 
     document.getElementById('res-qt').textContent  = r.Qt != null ? fmt(r.Qt, 3) + ' kW' : '—';
     document.getElementById('res-qs').textContent  = r.Qs != null ? fmt(r.Qs, 3) + ' kW' : '—';
@@ -918,10 +1084,70 @@ var UIController = (function () {
   function init() {
     var cvs = document.getElementById('chart-canvas');
     PsychroChart.setup(cvs);
+    initChartHover(cvs);
+  }
+
+  function initChartHover(cvs) {
+    var tooltip = document.getElementById('chart-tooltip');
+    var panel = document.getElementById('chart-panel');
+
+    cvs.addEventListener('mousemove', function (e) {
+      var rect = cvs.getBoundingClientRect();
+      var lay = PsychroChart.getLayout();
+      // Scale mouse coords to canvas coords
+      var scaleX = lay.CW / rect.width;
+      var scaleY = lay.CH / rect.height;
+      var cx = (e.clientX - rect.left) * scaleX;
+      var cy = (e.clientY - rect.top) * scaleY;
+
+      var tdb = PsychroChart.invTdb(cx);
+      var w   = PsychroChart.invW(cy);
+
+      if (tdb < -5 || tdb > 40 || w < 0 || w > 0.030) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      var rh  = Psychro.RH(tdb, w);
+      var wb  = Psychro.WB_from_TdbW(tdb, w);
+      var hv  = Psychro.h(tdb, w);
+      var vol = Psychro.v(tdb, w);
+      var tdp = Psychro.Tdp(w);
+
+      // Only show if within saturation (W <= Wsat)
+      if (w > Psychro.Wsat(tdb) * 1.02) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      tooltip.innerHTML =
+        'DB: ' + tdb.toFixed(1) + ' °C<br>' +
+        'WB: ' + wb.toFixed(1) + ' °C<br>' +
+        'DP: ' + tdp.toFixed(1) + ' °C<br>' +
+        'RH: ' + (rh * 100).toFixed(1) + ' %<br>' +
+        'W: ' + (w * 1000).toFixed(2) + ' g/kg<br>' +
+        'h: ' + hv.toFixed(1) + ' kJ/kg<br>' +
+        'v: ' + vol.toFixed(4) + ' m³/kg';
+
+      // Position tooltip near cursor
+      var tx = e.clientX - panel.getBoundingClientRect().left + 16;
+      var ty = e.clientY - panel.getBoundingClientRect().top - 10;
+      // Keep within panel
+      if (tx + 160 > panel.offsetWidth) tx = tx - 180;
+      if (ty < 0) ty = 10;
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top  = ty + 'px';
+      tooltip.style.display = 'block';
+    });
+
+    cvs.addEventListener('mouseleave', function () {
+      tooltip.style.display = 'none';
+    });
   }
 
   return {
     setMode: setMode,
+    setAirMode: setAirMode,
     onCalculate: onCalculate,
     onExportPDF: onExportPDF,
     init: init
